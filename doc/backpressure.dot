@@ -1,0 +1,55 @@
+digraph {
+	// rankdir = LR
+	node [shape = box]
+
+	// { rank = same; sk_psock_strp_read, sk_psock_verdict_recv }
+	{ rank = same; "→read_sock(…, strp_recv)" "→read_sock(…, sk_psock_verdict_recv)" }
+	{ rank = same; sk_psock_strp_data_ready sk_psock_verdict_data_ready }
+	{ rank = same; strp_recv sk_psock_verdict_recv }
+	// { rank = same; sk_psock_verdict_data_ready }
+
+	do_softirq -> net_rx_action -> process_backlog -> ip_rcv -> tcp_v4_rcv -> tcp_v4_do_rcv -> tcp_rcv_established -> tcp_data_queue -> tcp_data_ready -> "sk→sk_data_ready"
+	
+	"sk→sk_data_ready" -> sk_psock_strp_data_ready
+	"sk→sk_data_ready" -> sk_psock_verdict_data_ready
+
+	// parser + verdict case
+	sk_psock_strp_data_ready -> strp_data_ready
+
+	strp_data_ready -> "queue_work(…, &strp->work)" -> strp_work -> do_strp_work -> strp_read_sock
+	strp_data_ready -> strp_read_sock -> "→read_sock(…, strp_recv)" -> tcp_read_sock -> strp_recv -> __strp_recv -> "strp→cb.rcv_msg" -> sk_psock_strp_read
+
+	// calls
+	sk_psock_verdict_data_ready -> "→read_sock(…, sk_psock_verdict_recv)" -> tcp_read_sock
+	tcp_read_sock -> sk_psock_verdict_recv
+	
+	sk_psock_strp_read -> sk_psock_verdict_apply
+	sk_psock_verdict_recv -> sk_psock_verdict_apply
+
+	sk_psock_verdict_apply -> sk_psock_skb_redirect
+
+	sk_psock_verdict_apply -> sk_psock_skb_ingress_self
+	sk_psock_verdict_apply -> "schedule_work(&psock->work)"
+
+	// data path
+	sk_psock_verdict_apply -> "psock→ingress_skb":front [label = "skb_queue_tail"]
+
+	"schedule_work(&psock->work)" -> sk_psock_backlog
+
+	"psock→ingress_skb":back -> sk_psock_backlog [label = "skb_dequeue"]
+	
+	sk_psock_backlog -> sk_psock_handle_skb
+	sk_psock_handle_skb -> sk_psock_skb_ingress
+	
+	sk_psock_skb_ingress -> sk_psock_skb_ingress_enqueue
+	sk_psock_skb_ingress_self -> sk_psock_skb_ingress_enqueue
+
+	// returns - backpressure scenario
+	sk_psock_skb_redirect -> sk_psock_verdict_apply [label = "-EIO", color = red, fontcolor = red]
+	sk_psock_verdict_apply -> sk_psock_verdict_recv [label = "-EIO", color = red, fontcolor = red]
+	sk_psock_verdict_apply -> sk_psock_strp_read [label = "-EIO (ignored!)", color = red, fontcolor = red]
+	sk_psock_verdict_recv -> tcp_read_sock [label = "len = 0", color = red, fontcolor = red]
+
+
+	"psock→ingress_skb" [label = "{ <front> |||||| <back> }" shape = "record" xlabel="psock→ingress_skb"];
+}
